@@ -1,0 +1,620 @@
+---
+title: |
+  | Risk and Return of NBA Shot Portfolios:
+  | Has the League Left the Efficient Frontier?
+author: "Shane Sanders^[Department of Sport Analytics, Falk College of Sport, Syracuse University.]"
+date: "September 2026"
+output:
+  pdf_document:
+    keep_tex: true
+    number_sections: true
+    fig_caption: true
+    latex_engine: pdflatex
+geometry: margin=1.1in
+fontsize: 11pt
+header-includes:
+  - \usepackage{amsmath,amssymb}
+  - \usepackage{booktabs}
+  - \usepackage{caption}
+  - \captionsetup{font=small,labelfont=bf}
+  - \newtheorem{proposition}{Proposition}
+abstract: |
+  We treat an NBA team-game as a portfolio of scaled Bernoulli trials and characterize its mean-variance geometry. Because shot attempts are independent draws rather than divisible holdings, portfolio variance is linear in the three-point attempt rate and no diversification benefit arises from mixing shot types. The attainable risk-return locus is therefore monotone, and its slope is governed entirely by the sign of the true-value premium of a three-point attempt over a two-point attempt. Using league averages for 2013-14 through 2025-26 and the shot-pursuant free throw adjustment of Ehrlich and Sanders (2024), we find that this locus flipped from upward to downward sloping in 2016-17 and that the league has since moved persistently down and to the right along it. Scoring risk attributable to shot selection rose by roughly ten percent while expected points per attempt from the marginal three-point attempt fell below that of the two-point attempt. A win-probability model implies that the drift in attempt rates costs a league-average offense between 1.4 and 2.0 percentage points of win probability, with the risk channel penalizing strong teams and subsidizing weak ones. The observed attempt rate is rationalizable only if a ten percentage point increase in the three-point attempt rate raises league two-point accuracy by at least 0.75 percentage points. Once common time trends are removed, we find no evidence of a relationship of that magnitude.
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
+                      fig.align = "center", dev = "pdf")
+library(ggplot2)
+library(patchwork)
+
+TWO   <- "#1f3a5f"
+THREE <- "#c1553b"
+ACC   <- "#2b7a6f"
+GREY  <- "#8a8a8a"
+
+theme_paper <- theme_minimal(base_size = 9, base_family = "serif") +
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major = element_line(colour = "#e2e2e2", linewidth = 0.25),
+        axis.line  = element_line(colour = "#444444", linewidth = 0.3),
+        plot.title = element_text(face = "bold", size = 9.5),
+        legend.position = "bottom",
+        legend.title = element_blank(),
+        legend.key.height = unit(8, "pt"))
+theme_set(theme_paper)
+```
+
+```{r data}
+## ---------------------------------------------------------------------------
+## Basketball Reference, NBA League Averages - Per Game, regular season.
+## Retrieved 2026-09-11 from
+##   https://www.basketball-reference.com/leagues/NBA_stats_per_game.html
+## Columns: season-ending year, FG, FGA, 3P, 3PA, PTS, 3P%, FT%, Pace,
+##          ORtg, FT made per FGA.
+## ---------------------------------------------------------------------------
+d <- data.frame(
+  yr     = 2014:2026,
+  FG     = c(37.7,37.5,38.2,39.0,39.6,41.1,40.9,41.2,40.6,42.0,42.2,41.7,42.0),
+  FGA    = c(83.0,83.6,84.6,85.4,86.1,89.2,88.8,88.4,88.1,88.3,88.9,89.2,89.1),
+  TP     = c( 7.7, 7.8, 8.5, 9.7,10.5,11.4,12.2,12.7,12.4,12.3,12.8,13.5,13.3),
+  TPA    = c(21.5,22.4,24.1,27.0,29.0,32.0,34.1,34.6,35.2,34.2,35.1,37.6,37.0),
+  PTS    = c(101.0,100.0,102.7,105.6,106.3,111.2,111.8,112.1,110.6,114.7,114.2,113.8,115.6),
+  p3     = c(.360,.350,.354,.358,.362,.355,.358,.367,.354,.361,.366,.360,.360),
+  q      = c(.756,.750,.757,.772,.767,.766,.773,.778,.775,.782,.784,.780,.783),
+  FTmFGA = c(.215,.205,.209,.209,.193,.198,.201,.192,.192,.208,.192,.189,.206)
+)
+d$label <- paste0(d$yr - 1, "-", substr(d$yr, 3, 4))
+d$w  <- d$TPA / d$FGA                       # three-point attempt rate
+d$p2 <- (d$FG - d$TP) / (d$FGA - d$TPA)     # two-point conversion rate
+```
+
+```{r calibration}
+## ---------------------------------------------------------------------------
+## Shot-pursuant free throws, calibrated to Ehrlich and Sanders (2024).
+## Published 2022-23 true values: 1.181 (2PA) and 1.094 (3PA); field-goal-only
+## values 1.096 and 1.083.  The shot-pursuant made-FT components are therefore
+## 0.085 and 0.011 points.  We convert these to FREE THROW ATTEMPT rates and
+## hold those fixed, letting league FT% vary across seasons.
+## ---------------------------------------------------------------------------
+Q23 <- 0.782
+A2  <- 0.085 / Q23      # shot-pursuant FTA per 2PA
+A3  <- 0.011 / Q23      # shot-pursuant FTA per 3PA
+
+d$phi2 <- A2 * d$q
+d$phi3 <- A3 * d$q
+d$mu2  <- 2 * d$p2 + d$phi2
+d$mu3  <- 3 * d$p3 + d$phi3
+d$prem_fg   <- 3 * d$p3 - 2 * d$p2          # field-goal-only premium
+d$prem_true <- d$mu3 - d$mu2                # true-value premium
+
+## per-attempt point variance: scaled Bernoulli field goal + independent FT term
+d$v2 <- 4 * d$p2 * (1 - d$p2) + A2 * d$q * (1 - d$q)
+d$v3 <- 9 * d$p3 * (1 - d$p3) + A3 * d$q * (1 - d$q)
+d$s2 <- sqrt(d$v2); d$s3 <- sqrt(d$v3)
+
+d$muP <- (1 - d$w) * d$mu2 + d$w * d$mu3
+d$vP  <- (1 - d$w) * d$v2  + d$w * d$v3
+d$sP  <- sqrt(d$vP)
+d$game_sd <- sqrt(d$FGA * d$vP)
+
+## validation: do implied totals reproduce observed points per game?
+d$nonshot_ft <- d$FTmFGA - ((1 - d$w) * d$phi2 + d$w * d$phi3)
+d$pts_model  <- d$FGA * d$muP + d$FGA * d$nonshot_ft
+max_pts_err  <- max(abs(d$pts_model - d$PTS))
+
+r26 <- d[d$yr == 2026, ]; r25 <- d[d$yr == 2025, ]
+r17 <- d[d$yr == 2017, ]; r14 <- d[d$yr == 2014, ]
+```
+
+# Introduction
+
+An NBA offense receives roughly one hundred possessions per game and must convert
+each into a shot attempt. The central allocation decision is the split between
+two-point and three-point attempts. Over the player-tracking era the league has
+moved decisively toward the latter, from a three-point attempt rate of
+`r sprintf("%.3f", r14$w)` in 2013-14 to `r sprintf("%.3f", r26$w)` in 2025-26.
+
+The analytical case for that movement rested on a comparison of means: the
+expected points from a three-point attempt exceeded that from a two-point
+attempt. Ehrlich and Sanders (2024) show that this comparison is misspecified
+because it omits shot-pursuant free throws, which accrue far more readily to
+attempts near the basket, and that the corrected premium turned negative in the
+late 2010s. We extend the argument in a second direction. Even a correctly
+measured expected-points premium is an incomplete decision criterion, because a
+team maximizes wins rather than season-long offensive efficiency. Wins depend on
+the distribution of game-level scoring, not only its mean. A three-point attempt
+is a substantially riskier instrument than a two-point attempt, and the league
+has been accumulating that risk.
+
+We formalize the team-game as a portfolio problem, derive its mean-variance
+geometry, and bring league data to bear. Our contribution is threefold. First,
+we show that the portfolio structure here differs from the canonical Markowitz
+setting in a way that removes any diversification motive for mixing shot types.
+Second, we document that the attainable risk-return locus reversed slope in
+2016-17 and that the league has moved down it ever since. Third, we quantify
+what would have to be true about offensive spacing for the current attempt rate
+to be defensible, and we test it.
+
+# The shot as a scaled Bernoulli asset
+
+Consider an attempt of type $t \in \{2,3\}$ converted with probability $p_t$.
+Let $\phi_t$ denote expected points from shot-pursuant free throws following an
+attempt of type $t$, so that expected points from the attempt are
+
+$$\mu_t = t\,p_t + \phi_t.$$
+
+We calibrate $\phi_t$ to Ehrlich and Sanders (2024), who report true values of
+1.181 for two-point attempts and 1.094 for three-point attempts in 2022-23
+against field-goal-only values of 1.096 and 1.083. The implied shot-pursuant
+components are 0.085 and 0.011 points respectively. We convert these to free
+throw attempt rates of $a_2 = `r sprintf("%.3f", A2)`$ and
+$a_3 = `r sprintf("%.3f", A3)`$ per attempt, hold those rates fixed, and let
+$\phi_t = a_t q$ vary with the league free throw conversion rate $q$. The
+resulting differential $\Delta \equiv \phi_2 - \phi_3$ is
+`r sprintf("%.3f", r26$phi2 - r26$phi3)` in 2025-26.
+
+The scoring outcome of an attempt is a Bernoulli trial scaled by $t$ points, so
+its field-goal variance is $t^2 p_t(1-p_t)$. Adding an independent free throw
+component gives
+
+$$\sigma_t^2 = t^2 p_t (1-p_t) + a_t\,q(1-q).$$
+
+Two features deserve emphasis. A single unscaled Bernoulli trial has variance
+maximized at $p = 1/2$, which would suggest that the two-point attempt is the
+riskier instrument, since two-point conversion rates sit near one half while
+three-point rates sit near one third. Point scaling reverses this conclusion.
+The variance of points from a two-point attempt is scaled by four and that from
+a three-point attempt by nine. In 2025-26 we obtain
+$\sigma_2 = `r sprintf("%.3f", r26$s2)`$ and
+$\sigma_3 = `r sprintf("%.3f", r26$s3)`$, so the three-point attempt carries a
+standard deviation roughly `r sprintf("%.0f", 100*(r26$s3/r26$s2 - 1))` percent
+larger. This ratio has been remarkably stable, ranging only between
+`r sprintf("%.3f", min(d$s3/d$s2))` and `r sprintf("%.3f", max(d$s3/d$s2))`
+across the thirteen seasons we study. The free throw term is small, contributing
+under one percent of per-attempt variance, so our variance results are
+insensitive to the free throw calibration even though our return results depend
+on it directly.
+
+Table 1 reports the resulting per-attempt quantities by season. As a validation,
+the implied league scoring totals reproduce observed points per game to within
+`r sprintf("%.1f", max_pts_err)` points in every season.
+
+```{r table1, results="asis"}
+tab <- data.frame(
+  Season = d$label,
+  `3PAr` = sprintf("%.3f", d$w),   `2P%` = sprintf("%.3f", d$p2),
+  `3P%`  = sprintf("%.3f", d$p3),
+  m2 = sprintf("%.3f", d$mu2),     m3 = sprintf("%.3f", d$mu3),
+  prem = sprintf("%+.3f", d$prem_true),
+  s2 = sprintf("%.3f", d$s2),      s3 = sprintf("%.3f", d$s3),
+  mP = sprintf("%.3f", d$muP),     sP = sprintf("%.3f", d$sP),
+  GameSD = sprintf("%.2f", d$game_sd),
+  check.names = FALSE)
+names(tab)[5:12] <- c("$\\mu_2$","$\\mu_3$","$\\mu_3-\\mu_2$","$\\sigma_2$",
+                      "$\\sigma_3$","$\\mu_P$","$\\sigma_P$","Game SD")
+print(knitr::kable(tab, format = "latex", booktabs = TRUE, escape = FALSE,
+                   align = c("l", rep("c", 11)), linesep = "",
+                   caption = "Per-attempt return and risk, NBA league averages."))
+```
+
+\noindent\footnotesize \emph{Notes.} $\mu_t$ and $\sigma_t$ include
+shot-pursuant free throws calibrated to Ehrlich and Sanders (2024). Game SD is
+$\sqrt{\text{FGA}\cdot\sigma_P^2}$, the scoring standard deviation attributable
+to shot selection alone. \normalsize
+
+# Portfolio geometry
+
+Let $w$ denote the three-point attempt rate and $N$ the number of field goal
+attempts. Expected points and point variance per attempt are
+
+$$\mu_P(w) = (1-w)\mu_2 + w\mu_3, \qquad
+  \sigma_P^2(w) = (1-w)\sigma_2^2 + w\sigma_3^2.$$
+
+The second expression is the point at which this problem departs from the
+canonical portfolio setting. In Markowitz analysis, variance is quadratic in
+portfolio weights because assets covary and holdings are divisible. Here the
+offense allocates a fixed count of independent trials across two types. Outcomes
+of distinct attempts are uncorrelated, so total variance is additive across
+attempts and per-attempt variance is *linear* in $w$. There is consequently no
+diversification gain from mixing shot types beyond simple averaging, and no
+interior variance-minimizing portfolio.
+
+Eliminating $w$ between the two expressions yields the attainable locus
+
+$$\mu_P = \mu_2 + \frac{\mu_3 - \mu_2}{\sigma_3^2 - \sigma_2^2}
+          \left(\sigma_P^2 - \sigma_2^2\right),$$
+
+so expected points are linear in portfolio variance. This gives the following.
+
+\begin{proposition}
+With $p_2$ and $p_3$ fixed and $\sigma_3 > \sigma_2$, the attainable set in
+$(\sigma_P, \mu_P)$ space is a monotone curve whose slope carries the sign of
+$\mu_3 - \mu_2$. If $\mu_3 < \mu_2$, every portfolio with $w > 0$ is
+mean-variance dominated by $w = 0$.
+\end{proposition}
+
+The proposition converts a question about optimal shot selection into a question
+about the sign of a single scalar. It also makes clear why a mean-variance
+diagnostic alone cannot deliver a policy recommendation: taken literally under
+fixed conversion rates it prescribes abandoning the three-point shot entirely,
+which is implausible because $p_2$ is not invariant to $w$. We return to this in
+Section 6. What the proposition does deliver is a clean reading of direction of
+travel.
+
+# The league's realized path
+
+```{r fig1, fig.width=7.2, fig.height=2.9, fig.cap="The true-value premium on a three-point attempt and the scoring risk of the league-average shot portfolio."}
+long <- rbind(
+  data.frame(yr = d$yr, v = d$prem_fg,   k = "Field goals only"),
+  data.frame(yr = d$yr, v = d$prem_true, k = "Including shot-pursuant FTs"))
+brk <- c(2014, 2017, 2020, 2023, 2026)
+lab <- d$label[match(brk, d$yr)]
+
+pa <- ggplot(long, aes(yr, v, colour = k)) +
+  geom_hline(yintercept = 0, colour = "#333333", linewidth = 0.35) +
+  geom_ribbon(data = d, inherit.aes = FALSE,
+              aes(x = yr, ymin = pmin(prem_true, 0), ymax = 0),
+              fill = THREE, alpha = 0.12) +
+  geom_line(linewidth = 0.6) + geom_point(size = 1.2) +
+  scale_colour_manual(values = c("Field goals only" = GREY,
+                                 "Including shot-pursuant FTs" = THREE)) +
+  scale_x_continuous(breaks = brk, labels = lab) +
+  labs(x = NULL, y = "Expected points, 3PA minus 2PA",
+       title = "(a) The three-point premium has inverted")
+
+pb <- ggplot(d, aes(yr, game_sd)) +
+  geom_line(colour = TWO, linewidth = 0.7) +
+  geom_point(colour = TWO, size = 1.4) +
+  scale_x_continuous(breaks = brk, labels = lab) +
+  labs(x = NULL, y = "Scoring SD from shot selection (pts)",
+       title = "(b) Game-level scoring risk has risen")
+
+pa + pb
+```
+
+Figure 1(a) plots the premium $\mu_3 - \mu_2$ with and without the free throw
+adjustment. The field-goal-only premium declines steadily and crosses zero only
+around 2021-22. With shot-pursuant free throws included, the premium crosses
+zero in 2016-17 and reaches `r sprintf("%.3f", r26$prem_true)` points per
+attempt by 2025-26. The two series differ by roughly
+`r sprintf("%.3f", r26$phi2 - r26$phi3)` points, which is the entire distance
+between a decade of expansion looking justified and looking unjustified.
+Figure 1(b) shows the corresponding accumulation of risk: scoring standard
+deviation attributable to shot selection rose from
+`r sprintf("%.2f", r14$game_sd)` to `r sprintf("%.2f", r26$game_sd)` points per
+game, an increase of `r sprintf("%.1f", 100*(r26$game_sd/r14$game_sd - 1))`
+percent.
+
+```{r fig2, fig.width=7.4, fig.height=3.3, fig.cap="Attainable risk-return loci and the league's realized path. Marks in panel (a) indicate values of $w$."}
+locus <- function(row, n = 400) {
+  ws <- seq(0, 1, length.out = n)
+  data.frame(w = ws,
+             mu = (1 - ws) * row$mu2 + ws * row$mu3,
+             sd = sqrt((1 - ws) * row$v2 + ws * row$v3))
+}
+L26 <- locus(r26); L14 <- locus(r14)
+ticks <- L26[sapply(c(0, .2, .4, .6, .8, 1), function(z) which.min(abs(L26$w - z))), ]
+
+qa <- ggplot(L26, aes(sd, mu)) +
+  geom_line(colour = TWO, linewidth = 0.7) +
+  geom_point(data = ticks, colour = TWO, size = 1.3) +
+  geom_text(data = ticks, aes(label = sprintf("%.1f", w)),
+            hjust = -0.45, vjust = -0.5, size = 2.3, colour = TWO) +
+  geom_point(data = r26, aes(sP, muP), shape = 8, size = 2.6, colour = THREE) +
+  annotate("text", x = r26$sP + 0.015, y = r26$muP - 0.012,
+           label = "observed\n2025-26", size = 2.4, hjust = 0, colour = THREE) +
+  labs(x = expression(paste("Per-attempt scoring SD, ", sigma[P])),
+       y = expression(paste("Per-attempt expected points, ", mu[P])),
+       title = "(a) Attainable locus, 2025-26")
+
+qb <- ggplot() +
+  geom_line(data = L14, aes(sd, mu, colour = "2013-14 locus"), linewidth = 0.5) +
+  geom_line(data = L26, aes(sd, mu, colour = "2025-26 locus"), linewidth = 0.5) +
+  geom_path(data = d, aes(sP, muP), colour = THREE, alpha = 0.6, linewidth = 0.45) +
+  geom_point(data = d, aes(sP, muP), colour = THREE, size = 1.4) +
+  geom_text(data = d[d$yr %in% c(2014, 2017, 2020, 2023, 2026), ],
+            aes(sP, muP, label = label), size = 2.3, hjust = -0.15,
+            vjust = 1.4, colour = "#7a2f1c") +
+  scale_colour_manual(values = c("2013-14 locus" = GREY, "2025-26 locus" = TWO)) +
+  coord_cartesian(xlim = c(1.125, 1.245), ylim = c(1.045, 1.175)) +
+  labs(x = expression(paste("Per-attempt scoring SD, ", sigma[P])), y = NULL,
+       title = "(b) Realised path; the locus slope flipped")
+
+qa + qb
+```
+
+Figure 2 displays the geometry. Panel (a) traces the 2025-26 attainable locus as
+$w$ ranges from zero to one, with the observed portfolio marked. The locus is
+monotone decreasing, as the proposition requires, and the league sits well inside
+the region it dominates. Panel (b) overlays the league's realized path on the
+2013-14 and 2025-26 loci. The visual result is the paper's central fact. In
+2013-14 the attainable locus sloped upward, so additional three-point volume
+purchased additional expected points at the cost of additional risk, which is an
+ordinary risk-return tradeoff. By 2025-26 the locus slopes downward. The league
+nonetheless continued moving right along it.
+
+The reward-to-risk comparison is stark. In 2025-26 the two-point attempt returned
+`r sprintf("%.3f", r26$mu2/r26$s2)` points per unit of standard deviation against
+`r sprintf("%.3f", r26$mu3/r26$s3)` for the three-point attempt, a ratio of
+`r sprintf("%.2f", (r26$mu2/r26$s2)/(r26$mu3/r26$s3))`. For the three-point
+attempt to match the two-point attempt on this measure, its expected value would
+have to reach `r sprintf("%.3f", r26$mu2*r26$s3/r26$s2)` points, which implies a
+league three-point conversion rate near
+`r sprintf("%.0f", 100*(r26$mu2*r26$s3/r26$s2 - r26$phi3)/3)` percent. We report
+this comparison as a descriptive statistic rather than an equilibrium condition,
+since basketball admits no risk-free asset and no leverage: a possession must
+produce an attempt.
+
+# From variance to wins
+
+```{r winmodel}
+## calibration season: 2024-25
+N <- r25$FGA; wobs <- r25$w; qq <- r25$q
+SD_TOTAL <- 12.5                       # approx NBA team-game points SD
+
+port <- function(w, b = 0, cc = 0) {
+  p2 <- r25$p2 + b  * (w - wobs)
+  p3 <- r25$p3 + cc * (w - wobs)
+  mu2 <- 2 * p2 + r25$phi2; mu3 <- 3 * p3 + r25$phi3
+  v2  <- 4 * p2 * (1 - p2) + A2 * qq * (1 - qq)
+  v3  <- 9 * p3 * (1 - p3) + A3 * qq * (1 - qq)
+  c(mu = (1 - w) * mu2 + w * mu3, v = (1 - w) * v2 + w * v3)
+}
+base   <- port(wobs)
+E_EXOG <- SD_TOTAL^2 - N * base["v"]   # pace, turnover, non-shot FT variance
+
+pwin <- function(w, D, b = 0) {
+  p <- port(w, b)
+  as.numeric(pnorm((D + N * (p["mu"] - base["mu"])) /
+                   sqrt(N * p["v"] + E_EXOG + SD_TOTAL^2)))
+}
+
+old    <- port(r17$w)
+sd_old <- as.numeric(sqrt(N * old["v"]  + E_EXOG + SD_TOTAL^2))
+sd_new <- as.numeric(sqrt(N * base["v"] + E_EXOG + SD_TOTAL^2))
+Ds     <- c(-8, -4, 0, 4, 8)
+drift  <- t(sapply(Ds, function(D) {
+  pa <- as.numeric(pnorm((D + N * (old["mu"] - base["mu"])) / sd_old)) # 2016-17
+  pr <- as.numeric(pnorm(D / sd_old))                                  # return only
+  pb <- as.numeric(pnorm(D / sd_new))                                  # plus risk
+  c(D = D, old = pa, new = pb, total = 100*(pb-pa),
+    ret = 100*(pr-pa), risk = 100*(pb-pr), wins = 82*(pb-pa))
+}))
+ret_loss <- as.numeric(N * (base["mu"] - old["mu"]))
+E_EXOG   <- as.numeric(E_EXOG)
+```
+
+Reward-to-risk ratios are not the team objective. Let $Y$ denote own points and
+$Z$ opponent points, and let $D$ be the expected margin at the observed attempt
+rate. Modeling both as approximately normal,
+
+$$\Pr(\text{win}) = \Phi\!\left(
+  \frac{D + N\left[\mu_P(w) - \mu_P(w^{\text{obs}})\right]}
+       {\sqrt{N\sigma_P^2(w) + e + s_o^2}}\right),$$
+
+where $e$ captures scoring variance from pace, turnovers, and non-shot-pursuant
+free throws. We calibrate $e$ so that total team-game scoring standard deviation
+equals `r SD_TOTAL` points at the observed 2024-25 portfolio, which implies
+$e = `r sprintf("%.1f", E_EXOG)`$.
+
+This expression makes the asymmetry of risk explicit. Raising $w$ lowers the
+numerator whenever $\mu_3 < \mu_2$ and raises the denominator whenever
+$\sigma_3 > \sigma_2$. For a team with a positive expected margin both effects
+reduce win probability. For a sufficiently large underdog, variance is valuable,
+and the second effect partially offsets the first. Variance is exactly neutral at
+$D = 0$, where win probability is one half regardless of the portfolio.
+
+Holding 2024-25 skills fixed, we evaluate the move from the 2016-17 attempt rate
+of `r sprintf("%.3f", r17$w)` to the 2024-25 rate of `r sprintf("%.3f", wobs)`.
+Expected points fall by `r sprintf("%.2f", -ret_loss)` per game and own scoring
+standard deviation rises from
+`r sprintf("%.2f", sqrt(N*old["v"] + E_EXOG))` to
+`r sprintf("%.2f", sqrt(N*base["v"] + E_EXOG))` points. Win probability falls by
+`r sprintf("%.2f", -drift[1,"total"])` percentage points for a team eight points
+worse than its opponent, by `r sprintf("%.2f", -drift[3,"total"])` points at
+parity, and by `r sprintf("%.2f", -drift[5,"total"])` points for a team eight
+points better, which corresponds to between
+`r sprintf("%.1f", -max(drift[,"wins"]))` and
+`r sprintf("%.1f", -min(drift[,"wins"]))` wins over an 82-game season.
+Decomposing these figures, the return channel accounts for between
+`r sprintf("%.2f", -max(drift[,"ret"]))` and
+`r sprintf("%.2f", -min(drift[,"ret"]))` percentage points throughout, while the
+risk channel ranges from `r sprintf("%+.2f", max(drift[,"risk"]))` percentage
+points for the large underdog to `r sprintf("%+.2f", min(drift[,"risk"]))` for
+the large favorite. We take two lessons. The return channel dominates in
+magnitude, so the misspecification identified by Ehrlich and Sanders (2024)
+remains the first-order problem. The risk channel is smaller but asymmetric, and
+it implies that a uniform league-wide attempt rate cannot be optimal for teams of
+differing quality.
+
+# What would justify the observed rate?
+
+```{r gradient}
+fit_lv <- lm(p2 ~ w, data = d)
+dd     <- d[order(d$yr), ]
+diffs  <- data.frame(dw = diff(dd$w), dp2 = diff(dd$p2), dp3 = diff(dd$p3))
+fit_fd <- lm(dp2 ~ dw, data = diffs)
+fit_f3 <- lm(dp3 ~ dw, data = diffs)
+g_lv <- coef(summary(fit_lv))["w", ]; g_fd <- coef(summary(fit_fd))["dw", ]
+g_f3 <- coef(summary(fit_f3))["dw", ]
+
+mu2o <- 2*r25$p2 + r25$phi2; mu3o <- 3*r25$p3 + r25$phi3
+b_rn <- -(mu3o - mu2o) / (2 * (1 - wobs))     # return-neutral gradient at parity
+
+wstar <- function(D, b) optimize(function(w) pwin(w, D, b),
+                                 c(0.001, 0.90), maximum = TRUE)$maximum
+bstar <- sapply(seq(-8, 8, 2),
+                function(D) uniroot(function(b) wstar(D, b) - wobs,
+                                    c(0.01, 0.6), tol = 1e-6)$root)
+names(bstar) <- seq(-8, 8, 2)
+```
+
+The fixed-conversion analysis overstates the case because three-point volume
+plausibly improves interior efficiency through spacing. Let
+$p_2(w) = p_2^{\text{obs}} + b(w - w^{\text{obs}})$, where $b$ is the spacing
+gradient, and let three-point accuracy be unresponsive, consistent with our
+estimates below. Requiring that the observed attempt rate maximize win
+probability pins down the gradient that would be needed. At parity the condition
+reduces to $b^\ast = -(\mu_3 - \mu_2)/[2(1-w)]$, which evaluates to
+`r sprintf("%.3f", b_rn)` for 2024-25. Across expected margins from $-8$ to $+8$
+points, the required gradient ranges from `r sprintf("%.3f", min(bstar))` to
+`r sprintf("%.3f", max(bstar))`. A ten percentage point increase in the
+three-point attempt rate would have to raise league two-point accuracy by roughly
+`r sprintf("%.2f", 100*b_rn/10)` percentage points.
+
+```{r fig3, fig.width=7.2, fig.height=3.0, fig.cap="Two-point accuracy against the three-point attempt rate, in levels and in first differences."}
+ga <- ggplot(d, aes(w, p2)) +
+  geom_smooth(method = "lm", se = FALSE, colour = TWO, linewidth = 0.5) +
+  geom_point(colour = TWO, size = 1.5) +
+  geom_text(data = d[d$yr %in% c(2014, 2020, 2026), ], aes(label = label),
+            size = 2.3, hjust = -0.15, vjust = 1.5) +
+  labs(x = "3PAr", y = "League 2P%",
+       title = sprintf("(a) Levels: slope %+.3f", g_lv[1]))
+
+gb <- ggplot(diffs, aes(dw, dp2)) +
+  geom_hline(yintercept = 0, colour = "#333333", linewidth = 0.3) +
+  geom_vline(xintercept = 0, colour = "#333333", linewidth = 0.3) +
+  geom_abline(aes(intercept = 0, slope = b_rn,
+                  colour = sprintf("required slope (%.3f)", b_rn)),
+              linetype = "dashed", linewidth = 0.5) +
+  geom_smooth(method = "lm", se = FALSE, colour = THREE, linewidth = 0.5) +
+  geom_point(colour = THREE, size = 1.5) +
+  scale_colour_manual(values = setNames(ACC, sprintf("required slope (%.3f)", b_rn))) +
+  annotate("text", x = min(diffs$dw), y = min(diffs$dp2), hjust = 0, size = 2.3,
+           colour = THREE,
+           label = sprintf("intercept %+.2f pp/yr\n(secular trend)",
+                           100*coef(fit_fd)[1])) +
+  labs(x = expression(paste(Delta, " 3PAr")),
+       y = expression(paste(Delta, " League 2P%")),
+       title = sprintf("(b) First differences: slope %+.3f", g_fd[1]))
+
+ga + gb
+```
+
+Figure 3 confronts this requirement with the data. In levels, two-point accuracy
+rises steeply with the attempt rate, with a slope of
+`r sprintf("%+.3f", g_lv[1])` and a standard error of
+`r sprintf("%.3f", g_lv[2])`. Taken at face value this would exceed the
+requirement by a factor of five. The estimate is not credible as a causal
+magnitude, however, because both series trend upward across the sample. In first
+differences the point estimate is `r sprintf("%+.3f", g_fd[1])` with a standard
+error of `r sprintf("%.3f", g_fd[2])`, and the fitted intercept of
+`r sprintf("%+.2f", 100*coef(fit_fd)[1])` percentage points per season absorbs
+essentially the entire level relationship. The corresponding difference estimate
+for three-point accuracy is `r sprintf("%+.3f", g_f3[1])` with a standard error
+of `r sprintf("%.3f", g_f3[2])`. Figure 5 places the required gradient against
+both estimates.
+
+We do not claim that first differencing identifies the spacing effect either;
+thirteen annual observations cannot resolve a question of this kind, and the
+standard errors are wide enough to admit gradients well above the requirement.
+The appropriate reading is narrower and still useful. Almost all of the apparent
+association between three-point volume and interior efficiency is a common
+secular trend in shooting skill, and what remains once that trend is removed
+provides no support for a spacing dividend of the required magnitude. The burden
+of proof sits with the expansion.
+
+```{r fig4, fig.width=5.4, fig.height=3.9, fig.cap="Win probability against the three-point attempt rate under the break-even spacing gradient, by expected scoring margin. Markers denote optima."}
+ws  <- seq(0.05, 0.80, length.out = 300)
+cur <- do.call(rbind, lapply(Ds, function(D)
+  data.frame(w = ws, p = 100*sapply(ws, pwin, D = D, b = b_rn),
+             D = factor(sprintf("%+d pts", D),
+                        levels = sprintf("%+d pts", rev(Ds))))))
+opt <- do.call(rbind, lapply(Ds, function(D) {
+  wo <- wstar(D, b_rn)
+  data.frame(w = wo, p = 100*pwin(wo, D, b_rn),
+             D = factor(sprintf("%+d pts", D),
+                        levels = sprintf("%+d pts", rev(Ds))))
+}))
+
+ggplot(cur, aes(w, p, colour = D)) +
+  geom_vline(xintercept = wobs, linetype = "dotted", colour = "#333333",
+             linewidth = 0.4) +
+  geom_line(linewidth = 0.6) +
+  geom_point(data = opt, size = 1.6) +
+  scale_colour_manual(values = c("#0d2b4a", "#2f5f86", "#6b6b6b",
+                                 "#b2603f", "#8c2f16")) +
+  annotate("text", x = wobs + 0.015, y = 72.5, hjust = 0, size = 2.4,
+           colour = "#333333", label = "observed 3PAr (2024-25)") +
+  coord_cartesian(ylim = c(26, 74)) +
+  guides(colour = guide_legend(nrow = 1, reverse = TRUE)) +
+  labs(x = "Three-point attempt rate, 3PAr", y = "Win probability (%)",
+       title = "Win-maximising 3PAr by expected scoring margin")
+```
+
+```{r fig5, fig.width=5.8, fig.height=3.0, fig.cap="The spacing gradient required to rationalize the observed attempt rate, against estimates in levels and first differences. Bars show two standard errors."}
+est <- data.frame(
+  k  = factor(c("Levels\n(confounded by trend)", "First differences\n(trend removed)"),
+              levels = c("Levels\n(confounded by trend)",
+                         "First differences\n(trend removed)")),
+  b  = c(g_lv[1], g_fd[1]), se = c(g_lv[2], g_fd[2]))
+
+ggplot(est, aes(k, b)) +
+  annotate("rect", xmin = -Inf, xmax = Inf, ymin = min(bstar), ymax = max(bstar),
+           fill = ACC, alpha = 0.16) +
+  geom_hline(yintercept = b_rn, colour = ACC, linewidth = 0.6) +
+  geom_hline(yintercept = 0, colour = "#333333", linewidth = 0.3) +
+  geom_errorbar(aes(ymin = b - 2*se, ymax = b + 2*se, colour = k),
+                width = 0.07, linewidth = 0.5) +
+  geom_point(aes(colour = k), size = 2) +
+  scale_colour_manual(values = c(TWO, THREE), guide = "none") +
+  annotate("text", x = 2.4, y = b_rn + 0.06, hjust = 1, size = 2.4,
+           colour = "#1c5249",
+           label = sprintf("required: %.3f to %.3f\nto justify the observed 3PAr",
+                           min(bstar), max(bstar))) +
+  labs(x = NULL, y = expression(paste(partialdiff, " 2P% / ", partialdiff, " 3PAr")),
+       title = "Required spacing gradient against estimated gradient")
+```
+
+Granting the break-even gradient of `r sprintf("%.3f", b_rn)` exactly, Figure 4
+shows win probability as a function of the attempt rate for teams of differing
+quality. The win-maximizing rate falls from
+`r sprintf("%.3f", wstar(-8, b_rn))` for a team eight points worse than its
+opponent to `r sprintf("%.3f", wstar(8, b_rn))` for a team eight points better, a
+spread of nearly `r sprintf("%.0f", 100*(wstar(-8,b_rn) - wstar(8,b_rn)))`
+percentage points. This is a testable cross-sectional prediction, and it runs
+opposite to the common presumption that contending teams should lead the league
+in three-point volume.
+
+# Conclusion
+
+Treating the team-game as a portfolio of scaled Bernoulli trials yields a simple
+diagnostic. Because attempts are independent trials rather than divisible
+holdings, per-attempt variance is linear in the three-point attempt rate, the
+attainable risk-return locus is monotone, and its slope carries the sign of the
+true-value premium. That premium, measured to include shot-pursuant free throws,
+turned negative in 2016-17. The league has since added roughly ten percentage
+points of attempt rate and ten percent of scoring variance while moving down a
+locus that had already reversed direction.
+
+Two qualifications bound the claim. Our estimates are league aggregates, so they
+speak to the representative offense and not to teams whose personnel make the
+three-point attempt unusually productive. And our diagnostic conditions on
+conversion rates that are themselves equilibrium objects. The natural next step
+is a team-game panel that estimates the spacing gradient from within-season
+variation in lineup composition, which would replace our calibration exercise
+with identification. What the aggregate evidence establishes is that the case for
+the current attempt rate rests entirely on a spacing channel whose magnitude has
+not been demonstrated, and that the risk the league has taken on is not
+compensated at league-average conversion rates.
+
+# References {-}
+
+\small
+Ehrlich, J. and S. Sanders (2024). Estimating NBA team shot selection efficiency
+from aggregations of true, continuous shot charts: a generalized additive model
+approach. *Proceedings of the MIT Sloan Sports Analytics Conference*, Boston, MA.
+
+Fichman, M. and J. R. O'Brien (2019). Optimal shot selection strategies for the
+NBA. *Journal of Quantitative Analysis in Sports* 15(3), 203-211.
+
+Goldman, M. and J. M. Rao (2011). Allocative and dynamic efficiency in NBA
+decision making. *Proceedings of the MIT Sloan Sports Analytics Conference*.
+
+Markowitz, H. (1952). Portfolio selection. *Journal of Finance* 7(1), 77-91.
+
+Sanders, S. and J. Ehrlich (2025). Player tracking, shot charts, and the National
+Basketball Association's three-point revolution: a technology-based
+misspecification in a primary sport management setting? *Journal of Sport
+Management* 39(5), 323-334.
+\normalsize
