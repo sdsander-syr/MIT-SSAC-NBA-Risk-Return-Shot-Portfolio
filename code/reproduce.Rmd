@@ -15,8 +15,8 @@ library(lpSolve)
 library(ggplot2)
 library(dplyr)
 library(tidyr)
-dir.create("derived", showWarnings = FALSE)
-dir.create("figures", showWarnings = FALSE)
+dir.create("../derived", showWarnings = FALSE)
+dir.create("../figures", showWarnings = FALSE)
 ```
 
 # What this reproduces
@@ -49,7 +49,7 @@ theta_of <- function(season) {
 }
 games_of <- function(season) if (season == 2020) 71 else if (season == 2021) 72 else 82
 
-Z <- read.csv("team_season_zones.csv")
+Z <- read.csv("../data/team_season_zones.csv")
 stopifnot(all(c("season", "ab", "q", "FGA", SHARE, CONV) %in% names(Z)))
 seasons <- sort(unique(Z$season))
 cat(sprintf("%d team-seasons, %d seasons: %d to %d\n",
@@ -170,7 +170,7 @@ CF <- do.call(rbind, lapply(seasons, function(s) {
 SER <- merge(SER, CF, by = "season")
 SER$dev_gain <- SER$mD - SER$mD[1]      # points from shooter development
 SER$dsd_sel  <- SER$sS - SER$sS[1]      # risk added by shot selection
-write.csv(SER, "derived/season_series_recomputed.csv", row.names = FALSE)
+write.csv(SER, "../derived/season_series_recomputed.csv", row.names = FALSE)
 knitr::kable(SER[, c("season", "a_dm", "b_ds", "c_dm", "c_ds", "eo", "ei",
                      "dev_gain", "dsd_sel")],
              digits = 3, caption = "Recomputed season series")
@@ -195,8 +195,8 @@ zone_table <- function(subset) {
 }
 TF <- zone_table(seasons)
 T26 <- zone_table(max(seasons))
-write.csv(TF,  "derived/zone_table_full.csv", row.names = FALSE)
-write.csv(T26, "derived/zone_table_2026.csv", row.names = FALSE)
+write.csv(TF,  "../derived/zone_table_full.csv", row.names = FALSE)
+write.csv(T26, "../derived/zone_table_2026.csv", row.names = FALSE)
 knitr::kable(TF[order(-TF$attempts), ], digits = 3, row.names = FALSE,
              caption = "2013-14 through 2025-26 shot selection data summary")
 knitr::kable(T26[order(-T26$attempts), ], digits = 3, row.names = FALSE,
@@ -282,7 +282,7 @@ surf <- do.call(rbind, lapply(seasons, function(s) {
              sel_frozen = sapply(risk_grid, function(v)
                frontier_at(v, L$p, L$q, th, L$n)$pts))
 }))
-write.csv(surf, "derived/cf_surface_grid.csv", row.names = FALSE)
+write.csv(surf, "../derived/cf_surface_grid.csv", row.names = FALSE)
 ```
 
 ```{r fig1_2d, fig.width=11, fig.height=4.4}
@@ -313,7 +313,7 @@ ggplot(long, aes(season, risk)) +
   theme_minimal(base_size = 11) +
   theme(panel.grid = element_blank(), strip.text = element_text(face = "bold"),
         plot.title = element_text(face = "bold"), plot.title.position = "plot")
-ggsave("figures/figure1_counterfactuals.pdf", width = 11, height = 4.4)
+ggsave("../figures/figure1_counterfactuals.pdf", width = 11, height = 4.4)
 ```
 
 ```{r fig1_3d, eval=FALSE}
@@ -397,8 +397,8 @@ if (requireNamespace("patchwork", quietly = TRUE)) {
 } else {
   print(p_left); print(p_right)
 }
-ggsave("figures/figure2_frontier.pdf", plot = p_left, width = 6.2, height = 4.4)
-ggsave("figures/figure2_redistribution.pdf", plot = p_right, width = 5.0, height = 4.4)
+ggsave("../figures/figure2_frontier.pdf", plot = p_left, width = 6.2, height = 4.4)
+ggsave("../figures/figure2_redistribution.pdf", plot = p_right, width = 5.0, height = 4.4)
 ```
 
 # Three-point volume trend
@@ -416,7 +416,7 @@ ggplot(TR, aes(season)) +
        title = "Three-point attempt rate, 2013-14 to 2025-26") +
   theme_minimal(base_size = 11) +
   theme(plot.title = element_text(face = "bold"), panel.grid.minor = element_blank())
-ggsave("figures/trend_3par.pdf", width = 8, height = 3.6)
+ggsave("../figures/trend_3par.pdf", width = 8, height = 3.6)
 ```
 
 # Session information

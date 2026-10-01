@@ -21,15 +21,16 @@ season.
 Everything is in one R Markdown document.
 
 ```r
-source("install.R")                  # once, installs the packages below
-rmarkdown::render("reproduce.Rmd")   # -> reproduce.pdf
+# from the repository root
+source("code/install.R")                  # once, installs the packages below
+rmarkdown::render("code/reproduce.Rmd")   # -> code/reproduce.pdf
 ```
 
-`reproduce.Rmd` recomputes the six-zone tables, the three arbitrage measures, Farrell
+`code/reproduce.Rmd` recomputes the six-zone tables, the three arbitrage measures, Farrell
 technical efficiency, both counterfactual paths and the zone-share regressions from
-`team_season_zones.csv` alone. It prints a PASS/FAIL table against the values published in
+`data/team_season_zones.csv` alone. It prints a PASS/FAIL table against the values published in
 the abstract and **stops the knit if any check fails**. It then redraws both figures and the
-volume trend, writing tables to `derived/` and graphics to `figures/`.
+volume trend, writing tables to `derived/` and graphics to `figures/` (both created at the repository root).
 
 Packages: `lpSolve` (the linear program), `ggplot2`, `dplyr`, `tidyr`, `scales`, `knitr`,
 `rmarkdown`. Optional: `patchwork` for the two-panel layout, `plot3D` for the perspective
@@ -39,17 +40,17 @@ version of Figure 1.
 
 | File | Rows × Cols | Key | Contents |
 |---|---|---|---|
-| `team_season_zones.csv` | 390 × 44 | `season`, `ab` | **Everything is computed from this.** Zone shares and conversion rates, with the linear-program solutions on raw inputs (`mk__*`) and GAM-fitted inputs (`mkgam__*`). |
-| `season_series.csv` | 13 × 96 | `season` | Season-level series as previously computed. Columns carry their source as a prefix: `arbitrage__*`, `farrell__*`, `cf_paths__*`, `trend_series__*`. Useful for cross-checking what `reproduce.Rmd` regenerates. |
-| `team_season_boxscore.csv` | 390 × 62 | `season`, team | Basketball Reference Advanced and Per Game panel. |
-| `gam_zone_team_season.csv` | 2,340 × 11 | `season`, `ab`, `zone` | GAM estimation sample with fitted values (`p_gam`). |
-| `gam_partial_effects.csv` | 360 × 7 | `zone`, smooth | GAM partial effects. |
-| `cf_surface_grid.csv` | 338 × 4 | `season`, `risk` | Counterfactual frontier surfaces. `reproduce.Rmd` regenerates this into `derived/`. |
-| `zones_raw_transcription.csv` | 390 × 14 | `season`, `ab` | Pre-validation transcription from the Basketball Reference shooting tables. Provenance only — use `team_season_zones.csv`. |
+| `data/team_season_zones.csv` | 390 × 44 | `season`, `ab` | **Everything is computed from this.** Zone shares and conversion rates, with the linear-program solutions on raw inputs (`mk__*`) and GAM-fitted inputs (`mkgam__*`). |
+| `data/season_series.csv` | 13 × 96 | `season` | Season-level series as previously computed. Columns carry their source as a prefix: `arbitrage__*`, `farrell__*`, `cf_paths__*`, `trend_series__*`. Useful for cross-checking what `code/reproduce.Rmd` regenerates. |
+| `data/team_season_boxscore.csv` | 390 × 62 | `season`, team | Basketball Reference Advanced and Per Game panel. |
+| `data/gam_zone_team_season.csv` | 2,340 × 11 | `season`, `ab`, `zone` | GAM estimation sample with fitted values (`p_gam`). |
+| `data/gam_partial_effects.csv` | 360 × 7 | `zone`, smooth | GAM partial effects. |
+| `data/cf_surface_grid.csv` | 338 × 4 | `season`, `risk` | Counterfactual frontier surfaces. `code/reproduce.Rmd` regenerates this into `derived/`. |
+| `data/zones_raw_transcription.csv` | 390 × 14 | `season`, `ab` | Pre-validation transcription from the Basketball Reference shooting tables. Provenance only — use `data/team_season_zones.csv`. |
 
 ## Key numbers, and where they come from
 
-All recomputed by `reproduce.Rmd` and checked against the abstract:
+All recomputed by `code/reproduce.Rmd` and checked against the abstract:
 
 | Quantity | 2025-26 |
 |---|---|
@@ -64,20 +65,54 @@ All recomputed by `reproduce.Rmd` and checked against the abstract:
 ## Layout
 
 ```
-README.md                     this file
-install.R                     installs the required packages
-reproduce.Rmd                 the whole analysis: compute, verify, draw
-.gitignore                    ignores derived/ and figures/
-team_season_zones.csv         the file everything is computed from
-season_series.csv             previously computed series, for cross-checking
-team_season_boxscore.csv      Basketball Reference panel
-gam_zone_team_season.csv      GAM estimation sample
-gam_partial_effects.csv       GAM partial effects
-cf_surface_grid.csv           counterfactual frontier surfaces
-zones_raw_transcription.csv   pre-validation transcription, provenance
-abstract/                     the submitted abstract and its two graphics
-legacy/                       superseded earlier draft, with a note
+README.md                         this file
+.gitignore                        ignores derived/ and figures/
+code/
+  install.R                       installs the required packages
+  reproduce.Rmd                   the whole analysis: compute, verify, draw
+data/
+  team_season_zones.csv           the file everything is computed from
+  season_series.csv               previously computed series, for cross-checking
+  team_season_boxscore.csv        Basketball Reference panel
+  gam_zone_team_season.csv        GAM estimation sample
+  gam_partial_effects.csv         GAM partial effects
+  cf_surface_grid.csv             counterfactual frontier surfaces
+  zones_raw_transcription.csv     pre-validation transcription, provenance
+abstract/                         the submitted abstract and its two graphics
+  ssac_abstract.tex
+  ssac_abstract.pdf
+  arbitrage (5).pdf
+  cf3d (1).pdf
+legacy/                           superseded earlier draft
+  nba_shot_portfolios.Rmd
+derived/                          (generated by code/reproduce.Rmd, git-ignored)
+figures/                          (generated by code/reproduce.Rmd, git-ignored)
 ```
+
+## Abstract
+
+The submitted SSAC27 abstract and the two graphics it includes are in `abstract/`.
+
+| File | Contents |
+|---|---|
+| `abstract/ssac_abstract.tex` | source; compile with pdflatex, run twice |
+| `abstract/ssac_abstract.pdf` | compiled, 2 pages |
+| `abstract/arbitrage (5).pdf` | Figure 2 graphic |
+| `abstract/cf3d (1).pdf` | Figure 1 graphic |
+
+The filenames with spaces and parentheses are what `\includegraphics` in the .tex
+expects; keep them as they are, and compile from inside `abstract/`.
+
+LaTeX packages: geometry amsmath amssymb graphicx caption xcolor microtype booktabs
+
+## Legacy
+
+`legacy/nba_shot_portfolios.Rmd` is an earlier draft that predates the equilibrium reframing.
+Its conclusions were superseded by the current analysis. Kept for provenance only.
+
+An earlier Python implementation (reproduce.py, cf3d.py, arb_fig.py) was replaced by
+`code/reproduce.Rmd`, which performs the same computation, the same
+verification against the published values, and draws the same figures in R.
 
 ## Caveats
 
@@ -95,7 +130,7 @@ legacy/                       superseded earlier draft, with a note
   not inferential, and are presented as such.
 - Scoring variance here is the shot-selection component only; it excludes pace and turnovers.
 - `legacy/` holds an earlier draft that predates the equilibrium reframing. See
-  `legacy/NOTE.txt`.
+  [Legacy](#legacy).
 
 ## License
 

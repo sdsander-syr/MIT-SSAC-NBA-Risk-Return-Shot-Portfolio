@@ -1,6 +1,0 @@
-nba_shot_portfolios.Rmd is an earlier draft that predates the equilibrium reframing.
-Its conclusions were superseded by the current analysis. Kept for provenance only.
-
-An earlier Python implementation (reproduce.py, cf3d.py, arb_fig.py) was replaced by
-reproduce.Rmd in the repository root, which performs the same computation, the same
-verification against the published values, and draws the same figures in R.
