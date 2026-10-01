@@ -1,0 +1,8 @@
+derived/
+figures/
+*.log
+*.aux
+*.out
+.Rhistory
+.RData
+reproduce.pdf

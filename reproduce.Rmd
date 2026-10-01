@@ -1,0 +1,426 @@
+---
+title: "Risk and Return in NBA Team-Game Shot-Selection Portfolios"
+subtitle: "Full reproduction of the MIT SSAC27 abstract"
+author: "Shane Sanders · Department of Sport Analytics, Falk College of Sport, Syracuse University"
+output:
+  pdf_document:
+    toc: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                      fig.align = "center", dpi = 200)
+library(lpSolve)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+dir.create("derived", showWarnings = FALSE)
+dir.create("figures", showWarnings = FALSE)
+```
+
+# What this reproduces
+
+Each NBA shot is a Bernoulli trial scaled by its point value, so a team's shot
+distribution is a portfolio with both a return and a risk. Attempts are independent
+trials rather than correlated holdings, so covariance vanishes, portfolio variance is
+linear in the attempt-share weights, and the efficient frontier solves a linear rather
+than a quadratic program.
+
+This document recomputes every number reported in the abstract from
+`team_season_zones.csv` alone, checks each against the published value, and redraws both
+figures.
+
+# Constants and data
+
+```{r constants}
+SHARE <- c("s03", "s310", "s1016", "s163", "sc3", "snc3")
+CONV  <- c("p03", "p310", "p1016", "p163", "pc3", "pnc3")
+NAME  <- c("0-3 ft", "3-10 ft", "10-16 ft", "16 ft-arc", "corner 3", "above break 3")
+PTS   <- c(2, 2, 2, 2, 3, 3)
+
+# shot-pursuant free-throw value per attempt, by era and shot type, recovered from the
+# box-score accounting identity Phi = (1 - w) theta_2 + w theta_3
+theta_of <- function(season) {
+  tt <- if (season <= 2017) c(0.207, 0.216)
+        else if (season <= 2021) c(0.196, 0.202)
+        else c(0.250, 0.124)
+  ifelse(PTS == 2, tt[1], tt[2])
+}
+games_of <- function(season) if (season == 2020) 71 else if (season == 2021) 72 else 82
+
+Z <- read.csv("team_season_zones.csv")
+stopifnot(all(c("season", "ab", "q", "FGA", SHARE, CONV) %in% names(Z)))
+seasons <- sort(unique(Z$season))
+cat(sprintf("%d team-seasons, %d seasons: %d to %d\n",
+            nrow(Z), length(seasons), min(seasons), max(seasons)))
+```
+
+```{r helpers}
+# league-representative portfolio for one season
+league <- function(season) {
+  g <- Z[Z$season == season, ]
+  S <- as.matrix(g[, SHARE]); S <- S / rowSums(S)
+  list(x = colMeans(S),
+       p = colMeans(as.matrix(g[, CONV])),
+       q = mean(g$q),
+       n = mean(g$FGA))
+}
+
+# expected points per game and game-score standard deviation
+moments <- function(x, p, q, th, n) {
+  mu <- PTS * p + th
+  v  <- PTS^2 * p * (1 - p) + th * (1 - q)
+  c(pts = n * sum(x * mu), sd = sqrt(n * sum(x * v)))
+}
+
+# feasible set: the widest share any team-season ever demonstrated
+S_all <- as.matrix(Z[, SHARE]); S_all <- S_all / rowSums(S_all)
+LO <- apply(S_all, 2, min); HI <- apply(S_all, 2, max)
+```
+
+The linear program needs the box bounds written as explicit constraint rows, since
+`lpSolve::lp()` takes no bounds argument.
+
+```{r lp}
+# max  mu'x   s.t.  v'x <= sd^2/n ,  sum x = 1 ,  LO <= x <= HI
+frontier_at <- function(sd, p, q, th, n) {
+  mu <- PTS * p + th
+  v  <- PTS^2 * p * (1 - p) + th * (1 - q)
+  M   <- rbind(v, rep(1, 6), diag(6), diag(6))
+  dir <- c("<=", "=", rep(">=", 6), rep("<=", 6))
+  rhs <- c(sd^2 / n, 1, LO, HI)
+  r <- lp("max", mu, M, dir, rhs)
+  if (r$status != 0) return(list(pts = NA_real_, x = NULL))
+  list(pts = n * r$objval, x = r$solution)
+}
+
+# min  v'x   s.t.  mu'x >= m0/n ,  sum x = 1 ,  LO <= x <= HI
+min_risk_at <- function(m0, p, q, th, n) {
+  mu <- PTS * p + th
+  v  <- PTS^2 * p * (1 - p) + th * (1 - q)
+  M   <- rbind(mu, rep(1, 6), diag(6), diag(6))
+  dir <- c(">=", "=", rep(">=", 6), rep("<=", 6))
+  rhs <- c(m0 / n, 1, LO, HI)
+  r <- lp("min", v, M, dir, rhs)
+  if (r$status != 0) return(NULL)
+  list(sd = sqrt(n * sum(r$solution * v)), pts = n * sum(r$solution * mu),
+       x = r$solution)
+}
+```
+
+# The three improvement directions
+
+A holds risk and takes points. B minimises risk subject to not losing points. C is the
+point on the dominating frontier segment achieving an equal fraction of each endpoint's
+maximum gain.
+
+```{r arbitrage}
+arbitrage <- function(season) {
+  L <- league(season); th <- theta_of(season)
+  m <- moments(L$x, L$p, L$q, th, L$n); m0 <- m[["pts"]]; s0 <- m[["sd"]]
+
+  A <- frontier_at(s0, L$p, L$q, th, L$n)
+  B <- min_risk_at(m0, L$p, L$q, th, L$n)
+  dmA <- A$pts - m0
+  dsB <- s0 - B$sd
+
+  lo <- B$sd; hi <- s0
+  for (i in 1:80) {
+    mid <- (lo + hi) / 2
+    mm <- frontier_at(mid, L$p, L$q, th, L$n)$pts
+    if (dsB > 0 && dmA > 0 && (s0 - mid) / dsB > (mm - m0) / dmA) lo <- mid else hi <- mid
+  }
+  sC <- (lo + hi) / 2; C <- frontier_at(sC, L$p, L$q, th, L$n)
+
+  data.frame(season = season, pts = m0, sd = s0,
+             a_dm = dmA, b_ds = dsB, b_dm = B$pts - m0,
+             c_dm = C$pts - m0, c_ds = s0 - sC)
+}
+
+# Farrell technical efficiency, output- and input-oriented
+farrell <- function(season) {
+  L <- league(season); th <- theta_of(season)
+  m <- moments(L$x, L$p, L$q, th, L$n); m0 <- m[["pts"]]; s0 <- m[["sd"]]
+  top <- frontier_at(s0, L$p, L$q, th, L$n)$pts
+  smin <- min_risk_at(m0, L$p, L$q, th, L$n)$sd
+  data.frame(season = season, eo = m0 / top, ei = smin / s0)
+}
+
+ARB <- do.call(rbind, lapply(seasons, arbitrage))
+EFF <- do.call(rbind, lapply(seasons, farrell))
+SER <- merge(ARB, EFF, by = "season")
+```
+
+# Counterfactual paths
+
+Freeze one channel at 2013-14 and let the other move as observed.
+
+```{r counterfactual}
+L0 <- league(seasons[1]); th0 <- theta_of(seasons[1])
+CF <- do.call(rbind, lapply(seasons, function(s) {
+  L <- league(s); th <- theta_of(s)
+  sel <- moments(L$x,  L0$p, L0$q, th0, L0$n)   # shot selection moves only
+  dev <- moments(L0$x, L$p,  L$q,  th,  L$n)    # shooter development moves only
+  act <- moments(L$x,  L$p,  L$q,  th,  L$n)
+  data.frame(season = s, mS = sel[["pts"]], sS = sel[["sd"]],
+             mD = dev[["pts"]], sD = dev[["sd"]],
+             mA = act[["pts"]], sA = act[["sd"]])
+}))
+SER <- merge(SER, CF, by = "season")
+SER$dev_gain <- SER$mD - SER$mD[1]      # points from shooter development
+SER$dsd_sel  <- SER$sS - SER$sS[1]      # risk added by shot selection
+write.csv(SER, "derived/season_series_recomputed.csv", row.names = FALSE)
+knitr::kable(SER[, c("season", "a_dm", "b_ds", "c_dm", "c_ds", "eo", "ei",
+                     "dev_gain", "dsd_sel")],
+             digits = 3, caption = "Recomputed season series")
+```
+
+# Zone tables, attempt-weighted
+
+```{r zone_tables}
+zone_table <- function(subset) {
+  att <- rep(0, 6); wp <- rep(0, 6); wth <- rep(0, 6); wq <- 0; tq <- 0
+  for (s in subset) {
+    L <- league(s); th <- theta_of(s)
+    nat <- L$x * L$n * games_of(s) * 30            # 30 teams
+    att <- att + nat; wp <- wp + nat * L$p; wth <- wth + nat * th
+    wq <- wq + sum(nat) * L$q; tq <- tq + sum(nat)
+  }
+  pb <- wp / att; th <- wth / att; q <- wq / tq
+  mu <- PTS * pb + th
+  sd <- sqrt(PTS^2 * pb * (1 - pb) + th * (1 - q))
+  data.frame(zone = NAME, attempts = att, share = att / sum(att),
+             theta = th, exp_pts = mu, sd = sd)
+}
+TF <- zone_table(seasons)
+T26 <- zone_table(max(seasons))
+write.csv(TF,  "derived/zone_table_full.csv", row.names = FALSE)
+write.csv(T26, "derived/zone_table_2026.csv", row.names = FALSE)
+knitr::kable(TF[order(-TF$attempts), ], digits = 3, row.names = FALSE,
+             caption = "2013-14 through 2025-26 shot selection data summary")
+knitr::kable(T26[order(-T26$attempts), ], digits = 3, row.names = FALSE,
+             caption = "2025-26 shot selection data summary")
+```
+
+# Zone-share regressions
+
+```{r regressions}
+zone_reg <- function(T) {
+  d <- data.frame(share = T$share, ExpPts = T$exp_pts, SD = T$sd)
+  fits <- list(both = lm(share ~ ExpPts + SD, d),
+               ret  = lm(share ~ ExpPts, d),
+               risk = lm(share ~ SD, d))
+  lapply(fits, function(f) list(coef = round(coef(f), 3),
+                                r2 = round(summary(f)$r.squared, 3)))
+}
+RF <- zone_reg(TF); R26 <- zone_reg(T26)
+for (tag in c("full", "2026")) {
+  r <- if (tag == "full") RF else R26
+  cat(sprintf("%s  zone-share = %+.3f %+.3f*ExpPts %+.3f*SD   R2 = %.3f\n",
+              tag, r$both$coef[1], r$both$coef[2], r$both$coef[3], r$both$r2))
+  cat(sprintf("%s  return alone R2 = %.3f   risk alone R2 = %.3f\n",
+              tag, r$ret$r2, r$risk$r2))
+}
+```
+
+# Verification against the abstract
+
+Every quantity printed in the abstract, recomputed here and compared. The chunk stops
+the knit if any check fails.
+
+```{r verify}
+r26 <- SER[SER$season == max(seasons), ]
+checks <- list(
+  list("A: points at unchanged risk",       r26$a_dm,              6.68,  0.02),
+  list("B: risk shed",                      r26$b_ds,              1.22,  0.02),
+  list("C: points",                         r26$c_dm,              5.68,  0.03),
+  list("C: risk",                           r26$c_ds,              1.04,  0.03),
+  list("Farrell output-oriented",           r26$eo,                0.945, 0.002),
+  list("Farrell input-oriented",            r26$ei,                0.892, 0.002),
+  list("shooter-development gain",          tail(SER$dev_gain, 1), 9.32,  0.05),
+  list("SD added by shot selection",        tail(SER$dsd_sel, 1),  0.70,  0.03),
+  list("vertical shortfall 2013-14",        SER$a_dm[1],           4.08,  0.03),
+  list("total FGA, millions",               sum(TF$attempts)/1e6,  2.776, 0.02),
+  list("rim expected points 2025-26",       T26$exp_pts[1],        1.662, 0.01),
+  list("rim SD 2025-26",                    T26$sd[1],             0.941, 0.01),
+  list("above-break 3 exp. pts 2025-26",    T26$exp_pts[6],        1.175, 0.01),
+  list("above-break 3 share 2025-26 (%)",   100*T26$share[6],      31.3,  0.3),
+  list("rim share 2025-26 (%)",             100*T26$share[1],      23.1,  0.3),
+  list("R2 zone-share full, both",          RF$both$r2,            0.273, 0.005),
+  list("R2 zone-share full, risk only",     RF$risk$r2,            0.001, 0.005),
+  list("R2 zone-share 2025-26, both",       R26$both$r2,           0.245, 0.005),
+  list("R2 zone-share 2025-26, risk only",  R26$risk$r2,           0.059, 0.005)
+)
+res <- do.call(rbind, lapply(checks, function(k) data.frame(
+  quantity = k[[1]], recomputed = round(as.numeric(k[[2]]), 3),
+  abstract = k[[3]],
+  status = ifelse(abs(as.numeric(k[[2]]) - k[[3]]) <= k[[4]], "PASS", "FAIL"))))
+knitr::kable(res, row.names = FALSE, caption = "Reproduction check")
+cat(sprintf("\n%d of %d checks pass\n", sum(res$status == "PASS"), nrow(res)))
+if (any(res$status == "FAIL")) stop("reproduction check failed; see the table above")
+```
+
+# Figure 1 — two counterfactuals
+
+The surface is the frontier, the line the actual path. Left panel freezes shooter
+development at 2013-14 with shot selection as observed; right panel freezes shot
+selection with development as observed.
+
+`ggplot2` has no 3D geometry, so the default below is a faceted 2D rendering of the same
+two surfaces: a filled raster of the frontier with the actual path drawn over it. This
+reads the gradient more precisely than a perspective view and has no occlusion. A
+`plot3D::persp3D` version follows for the perspective look.
+
+```{r fig1_surfaces}
+risk_grid <- seq(10.1, 12.1, length.out = 26)
+surf <- do.call(rbind, lapply(seasons, function(s) {
+  L <- league(s); th <- theta_of(s)
+  data.frame(season = s, risk = risk_grid,
+             dev_frozen = sapply(risk_grid, function(v)
+               frontier_at(v, L0$p, L0$q, th0, L0$n)$pts),
+             sel_frozen = sapply(risk_grid, function(v)
+               frontier_at(v, L$p, L$q, th, L$n)$pts))
+}))
+write.csv(surf, "derived/cf_surface_grid.csv", row.names = FALSE)
+```
+
+```{r fig1_2d, fig.width=11, fig.height=4.4}
+long <- surf %>%
+  pivot_longer(c(dev_frozen, sel_frozen), names_to = "panel", values_to = "frontier") %>%
+  mutate(panel = factor(panel, c("dev_frozen", "sel_frozen"),
+           c("Shooter development frozen, shot selection as observed",
+             "Shot selection frozen, shooter development as observed")))
+paths <- bind_rows(
+  transmute(CF, season, risk = sS, pts = mS,
+            panel = "Shooter development frozen, shot selection as observed"),
+  transmute(CF, season, risk = sD, pts = mD,
+            panel = "Shot selection frozen, shooter development as observed"))
+
+ggplot(long, aes(season, risk)) +
+  geom_raster(aes(fill = frontier), interpolate = TRUE) +
+  geom_contour(aes(z = frontier), colour = "white", linewidth = 0.25, bins = 12) +
+  geom_path(data = paths, colour = "white", linewidth = 2.1) +
+  geom_path(data = paths, colour = "grey12", linewidth = 1.1) +
+  geom_point(data = paths, colour = "white", fill = "grey12",
+             shape = 21, size = 1.7, stroke = 0.6) +
+  facet_wrap(~ panel) +
+  scale_fill_viridis_c(option = "inferno", name = "frontier\n(points)") +
+  labs(x = NULL, y = "risk: game-score standard deviation",
+       title = "Figure 1. The frontier and the actual path under each counterfactual",
+       subtitle = paste("Left: the frontier is flat in season and the path slides right.",
+                        "Right: the frontier rises and the path rises with it.")) +
+  theme_minimal(base_size = 11) +
+  theme(panel.grid = element_blank(), strip.text = element_text(face = "bold"),
+        plot.title = element_text(face = "bold"), plot.title.position = "plot")
+ggsave("figures/figure1_counterfactuals.pdf", width = 11, height = 4.4)
+```
+
+```{r fig1_3d, eval=FALSE}
+# perspective version; set eval=TRUE and install plot3D to use it
+library(plot3D)
+yrs <- seasons; rsk <- risk_grid
+ZA <- matrix(surf$dev_frozen, nrow = length(yrs), byrow = TRUE)
+ZB <- matrix(surf$sel_frozen, nrow = length(yrs), byrow = TRUE)
+panel <- function(M, px, py, pz, pal, ttl) {
+  persp3D(x = yrs, y = rsk, z = M, col = pal(100), colkey = FALSE,
+          theta = -62, phi = 20, expand = 0.6, border = NA, shade = 0.25,
+          alpha = 0.55, bty = "b2", xlab = "season",
+          ylab = "risk: scoring SD", zlab = "points per game",
+          main = ttl, cex.main = 0.95)
+  lines3D(px, py, pz, col = "white", lwd = 6, add = TRUE)
+  lines3D(px, py, pz, col = pal(100)[85], lwd = 4, add = TRUE)
+}
+par(mfrow = c(1, 2), mar = c(2, 2, 3, 1))
+panel(ZA, CF$season, CF$sS, CF$mS,
+      colorRampPalette(c("#FFF7BC", "#C0392B")),
+      "(a) Shooter development frozen")
+panel(ZB, CF$season, CF$sD, CF$mD,
+      colorRampPalette(c("#F7FCB9", "#1B7A4B")),
+      "(b) Shot selection frozen")
+```
+
+# Figure 2 — the frontier and where attempts should go
+
+```{r fig2, fig.width=11, fig.height=4.6}
+sn <- max(seasons); L <- league(sn); th <- theta_of(sn)
+m <- moments(L$x, L$p, L$q, th, L$n); m0 <- m[["pts"]]; s0 <- m[["sd"]]
+B <- min_risk_at(m0, L$p, L$q, th, L$n)
+A <- frontier_at(s0, L$p, L$q, th, L$n)
+fr <- data.frame(risk = seq(B$sd, 12.0, length.out = 80))
+fr$pts <- sapply(fr$risk, function(v) frontier_at(v, L$p, L$q, th, L$n)$pts)
+
+# the league's thirteen-season path
+trail <- data.frame(season = CF$season, risk = CF$sA, pts = CF$mA)
+# 2013-14 frontier, for the ghost line
+fr0 <- data.frame(risk = fr$risk,
+                  pts = sapply(fr$risk, function(v)
+                    frontier_at(v, L0$p, L0$q, th0, L0$n)$pts))
+
+p_left <- ggplot() +
+  geom_ribbon(data = subset(fr, risk <= s0 & pts >= m0),
+              aes(risk, ymin = m0, ymax = pts), fill = "#C0392B", alpha = 0.09) +
+  geom_line(data = fr0, aes(risk, pts), colour = "#BFCAD1", linewidth = 1.1) +
+  geom_line(data = fr,  aes(risk, pts), colour = "#14222B", linewidth = 1.3) +
+  geom_path(data = trail, aes(risk, pts), colour = "#E0A79E", linewidth = 0.7) +
+  geom_point(data = trail, aes(risk, pts, colour = season), size = 1.8) +
+  scale_colour_gradient(low = "#F3D3CD", high = "#C0392B", guide = "none") +
+  annotate("point", x = s0, y = m0, shape = 8, size = 4, colour = "#C0392B") +
+  annotate("segment", x = s0, xend = s0, y = m0, yend = A$pts,
+           colour = "#1B7A4B", linewidth = 1.0,
+           arrow = arrow(length = unit(0.16, "cm"))) +
+  annotate("segment", x = s0, xend = B$sd, y = m0, yend = B$pts,
+           colour = "#1F6FB2", linewidth = 1.0,
+           arrow = arrow(length = unit(0.16, "cm"))) +
+  labs(x = "risk: game-score standard deviation", y = "return: points per game",
+       title = "Thirteen seasons inside the frontier") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(face = "bold"), panel.grid.minor = element_blank())
+
+redist <- data.frame(zone = NAME, league = L$x / sum(L$x), target = B$x) %>%
+  mutate(zone = factor(zone, levels = NAME[order(L$x)]))
+p_right <- ggplot(redist, aes(y = zone)) +
+  geom_segment(aes(x = league, xend = target, yend = zone),
+               arrow = arrow(length = unit(0.16, "cm")),
+               colour = "#1B4965", linewidth = 0.9) +
+  geom_point(aes(x = league), colour = "#C0392B", size = 2.6) +
+  geom_text(aes(x = 0.47, label = sprintf("%+.3f", target - league)),
+            hjust = 1, size = 3) +
+  xlim(0, 0.48) +
+  labs(x = "share of field goal attempts", y = NULL,
+       title = "How 2025-26 should redistribute") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(face = "bold"), panel.grid.minor = element_blank())
+
+if (requireNamespace("patchwork", quietly = TRUE)) {
+  print(patchwork::wrap_plots(p_left, p_right, widths = c(1.25, 1)))
+} else {
+  print(p_left); print(p_right)
+}
+ggsave("figures/figure2_frontier.pdf", plot = p_left, width = 6.2, height = 4.4)
+ggsave("figures/figure2_redistribution.pdf", plot = p_right, width = 5.0, height = 4.4)
+```
+
+# Three-point volume trend
+
+```{r trend, fig.width=8, fig.height=3.6}
+TR <- do.call(rbind, lapply(seasons, function(s) {
+  L <- league(s)
+  data.frame(season = s, w = sum(L$x[5:6]), TPA = L$n * sum(L$x[5:6]), FGA = L$n)
+}))
+ggplot(TR, aes(season)) +
+  geom_line(aes(y = w), colour = "#C0392B", linewidth = 1.1) +
+  geom_point(aes(y = w), colour = "#C0392B", size = 1.6) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  labs(x = NULL, y = "three-point attempt rate",
+       title = "Three-point attempt rate, 2013-14 to 2025-26") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(face = "bold"), panel.grid.minor = element_blank())
+ggsave("figures/trend_3par.pdf", width = 8, height = 3.6)
+```
+
+# Session information
+
+```{r session}
+sessionInfo()
+```
